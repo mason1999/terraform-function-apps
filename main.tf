@@ -1,11 +1,11 @@
-##################################################
-# Obtain the current tenant id from this
-##################################################
+################################################################################
+# Tenant ID
+################################################################################
 data "azurerm_client_config" "current" {}
 
-##################################################
+################################################################################
 # Managed Identity
-##################################################
+################################################################################
 resource "azurerm_user_assigned_identity" "default_mi" {
   location            = var.location
   resource_group_name = var.function_app_resource_group_name
@@ -13,28 +13,9 @@ resource "azurerm_user_assigned_identity" "default_mi" {
   tags                = var.tags
 }
 
-##################################################
-# Bastion Jump Box
-##################################################
-module "portal_virtual_machine" {
-  source = "git::https://github.com/mason1999/terraform-windows-vm"
-
-  resource_group_name           = var.function_app_resource_group_name
-  location                      = var.location
-  suffix                        = "portal"
-  subnet_id                     = var.private_endpoint_subnet_id
-  enable_public_ip_address      = false
-  private_ip_address_allocation = "Static"
-  private_ip_address            = "10.0.1.10"
-  admin_username                = "testuser"
-  admin_password                = "WeakPassword123"
-  identity = {
-    type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.default_mi.id]
-  }
-
-}
-
+################################################################################
+# Jumpbox
+################################################################################
 module "function_push_virtual_machine" {
   source = "git::https://github.com/mason1999/terraform-linux-vm?ref=feat/function-apps"
 
@@ -42,7 +23,7 @@ module "function_push_virtual_machine" {
   location                      = var.location
   suffix                        = "push"
   subnet_id                     = var.private_endpoint_subnet_id
-  enable_public_ip_address      = false
+  enable_public_ip_address      = true
   private_ip_address_allocation = "Static"
   private_ip_address            = "10.0.1.11"
   admin_username                = "testuser"
@@ -55,20 +36,9 @@ module "function_push_virtual_machine" {
   }
 }
 
-module "bastion" {
-  source                                = "git::https://github.com/mason1999/terraform-azure-bastion.git"
-  name                                  = "bastion-host"
-  resource_group_name                   = var.shared_resource_group_name
-  location                              = var.location
-  sku                                   = "Standard"
-  virtual_network_id                    = regex("(/subscriptions/[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/resourceGroups/[\\w-]{1,90}/providers/Microsoft.Network/virtualNetworks/[\\w-]{2,64})/subnets/[\\w-]{2,64}", var.function_app_subnet_id)[0]
-  create_azure_bastion_subnet           = true
-  azure_bastion_subnet_address_prefixes = ["10.0.2.0/24"]
-}
-
-##################################################
+################################################################################
 # Function App Storage Account
-##################################################
+################################################################################
 resource "azurerm_storage_account" "function_app_storage_account" {
   name                            = var.function_app_storage_account_name
   resource_group_name             = var.function_app_resource_group_name
@@ -77,29 +47,23 @@ resource "azurerm_storage_account" "function_app_storage_account" {
   account_replication_type        = "LRS"
   shared_access_key_enabled       = true
   default_to_oauth_authentication = true
-  public_network_access_enabled   = false # TODO
+  public_network_access_enabled   = var.public_access_enabled # TODO
   tags                            = var.tags
+  provisioner "local-exec" {
+    when    = create
+    command = <<EOF
+    az storage share-rm create \
+      --resource-group ${var.function_app_resource_group_name} \
+      --storage-account ${self.name} \
+      --name ${var.file_share_name} \
+      --quota 100000
+    EOF
+  }
 }
 
-# resource "azurerm_storage_share" "function_app_storage_account_file_share" {
-#   name                 = var.file_share_name
-#   storage_account_name = azurerm_storage_account.function_app_storage_account.name
-#   quota                = 50
-
-#   acl {
-#     id = "share_id"
-
-#     access_policy {
-#       permissions = "rwdl"
-#       start       = "2024-11-01T00:00:00Z"
-#       expiry      = "2025-11-01T00:00:00Z"
-#     }
-#   }
-# }
-
-##################################################
+################################################################################
 # Private DNS zone and endpoint (blob) for Function App Storage Account
-##################################################
+################################################################################
 resource "azurerm_private_dns_zone" "blob_dns_zone" {
   name                = "privatelink.blob.core.windows.net"
   resource_group_name = var.shared_resource_group_name
@@ -133,9 +97,9 @@ resource "azurerm_private_endpoint" "function_app_blob" {
   tags = var.tags
 }
 
-##################################################
+################################################################################
 # Private DNS zone and endpoint (file) for Function App Storage Account
-##################################################
+################################################################################
 resource "azurerm_private_dns_zone" "file_dns_zone" {
   name                = "privatelink.file.core.windows.net"
   resource_group_name = var.shared_resource_group_name
@@ -170,9 +134,9 @@ resource "azurerm_private_endpoint" "function_app_file" {
 }
 
 
-##################################################
+################################################################################
 # Private DNS zone and endpoint (table) for Function App Storage Account
-##################################################
+################################################################################
 resource "azurerm_private_dns_zone" "table_dns_zone" {
   name                = "privatelink.table.core.windows.net"
   resource_group_name = var.shared_resource_group_name
@@ -207,9 +171,9 @@ resource "azurerm_private_endpoint" "function_app_table" {
 }
 
 
-##################################################
+################################################################################
 # Private DNS zone and endpoint (queue) for Function App Storage Account
-##################################################
+################################################################################
 resource "azurerm_private_dns_zone" "queue_dns_zone" {
   name                = "privatelink.queue.core.windows.net"
   resource_group_name = var.shared_resource_group_name
@@ -244,9 +208,9 @@ resource "azurerm_private_endpoint" "function_app_queue" {
 }
 
 
-##################################################
+################################################################################
 # Shared storage account
-##################################################
+################################################################################
 resource "azurerm_storage_account" "shared_storage_account" {
   name                            = var.shared_storage_account_name
   resource_group_name             = var.shared_resource_group_name
@@ -254,14 +218,14 @@ resource "azurerm_storage_account" "shared_storage_account" {
   account_tier                    = "Standard"
   account_replication_type        = "LRS"
   shared_access_key_enabled       = false
-  public_network_access_enabled   = false # Note that for this one, table storage doesn't respond well to disabling public network access.
+  public_network_access_enabled   = true # TODO
   default_to_oauth_authentication = true
   tags                            = var.tags
 }
 
-##################################################
+################################################################################
 # Private DNS zone and endpoint (table) for Shared Storage Account
-##################################################
+################################################################################
 resource "azurerm_private_endpoint" "function_app_table_shared_storage" {
   name                = "table-private-endpoint-shared-storage"
   location            = var.location
@@ -281,9 +245,9 @@ resource "azurerm_private_endpoint" "function_app_table_shared_storage" {
   tags = var.tags
 }
 
-##################################################
+################################################################################
 # Private DNS zone and endpoint (queue) for Shared Storage Account
-##################################################
+################################################################################
 resource "azurerm_private_endpoint" "function_app_queue_shared_storage" {
   name                = "queue-private-endpoint-shared-storage"
   location            = var.location
@@ -304,9 +268,9 @@ resource "azurerm_private_endpoint" "function_app_queue_shared_storage" {
 }
 
 
-##################################################
+################################################################################
 # Key Vault And Private DNS Zone / Private Endpoints
-##################################################
+################################################################################
 resource "azurerm_key_vault" "shared_key_vault" {
   name                          = "mason-shared-key-vault-1"
   location                      = var.location
@@ -316,9 +280,41 @@ resource "azurerm_key_vault" "shared_key_vault" {
   enabled_for_disk_encryption   = true
   purge_protection_enabled      = false
   enable_rbac_authorization     = true
-  public_network_access_enabled = false
+  public_network_access_enabled = var.public_access_enabled # TODO
   soft_delete_retention_days    = 7
   tags                          = var.tags
+
+  depends_on = [
+    azurerm_storage_account.function_app_storage_account
+  ]
+
+  provisioner "local-exec" {
+    when    = create
+    command = <<EOF
+    az keyvault secret set \
+      --vault-name ${self.name} \
+      --name ${var.connection_name_secret} \
+      --value "DefaultEndpointsProtocol=https;AccountName=${azurerm_storage_account.function_app_storage_account.name};AccountKey=${azurerm_storage_account.function_app_storage_account.primary_access_key};EndpointSuffix=core.windows.net"
+    EOF
+  }
+}
+
+resource "terraform_data" "destroy_connection_name_secret" {
+  count = var.destroy_connection_name_secret ? 1 : 0
+
+  provisioner "local-exec" {
+    when    = create
+    command = <<EOF
+    az keyvault secret delete \
+      --vault-name ${azurerm_key_vault.shared_key_vault.name} \
+      --name ${var.connection_name_secret}
+
+    az keyvault secret purge \
+      --vault-name ${azurerm_key_vault.shared_key_vault.name} \
+      --name ${var.connection_name_secret}
+    EOF
+  }
+
 }
 
 resource "azurerm_private_dns_zone" "keyvault_dns_zone" {
@@ -354,9 +350,9 @@ resource "azurerm_private_endpoint" "shared_keyvault" {
   tags = var.tags
 }
 
-##################################################
+################################################################################
 # App Service Plan
-##################################################
+################################################################################
 resource "azurerm_service_plan" "asp_testingapp" {
   name                         = "asp-testingapp"
   resource_group_name          = var.function_app_resource_group_name
@@ -369,9 +365,9 @@ resource "azurerm_service_plan" "asp_testingapp" {
   tags                         = var.tags
 }
 
-##################################################
+################################################################################
 # Function App
-##################################################
+################################################################################
 
 resource "azurerm_windows_function_app" "fa_testingapp" {
   name                = "fa-masonapp"
@@ -392,27 +388,40 @@ resource "azurerm_windows_function_app" "fa_testingapp" {
     identity_ids = [azurerm_user_assigned_identity.default_mi.id]
   }
 
-  public_network_access_enabled = false # TODO
+  public_network_access_enabled = var.public_access_enabled # TODO
 
   app_settings = {
 
-    # AzureWebJobsStorage__credential      = "managedidentity"
-    # AzureWebJobsStorage__clientId        = azurerm_user_assigned_identity.default_mi.client_id
-    # AzureWebJobsStorage__accountName     = azurerm_storage_account.function_app_storage_account.name
-    # AzureWebJobsStorage__blobServiceUri  = "https://${azurerm_storage_account.function_app_storage_account.name}.blob.core.windows.net"  # I don't think this is necessary if AzureWebJobsStorage_accountName is set
-    # AzureWebJobsStorage__queueServiceUri = "https://${azurerm_storage_account.function_app_storage_account.name}.queue.core.windows.net" # I don't think this is necessary if AzureWebJobsStorage_accountName is set
-    # AzureWebJobsStorage__tableServiceUri = "https://${azurerm_storage_account.function_app_storage_account.name}.table.core.windows.net" # I don't think this is necessary if AzureWebJobsStorage_accountName is set
+    ####################################################################################################################################
+    # Arhives files and mounts it as a read only section to C:\home\site\wwwroot. Mutually exclusive to SCM_DO_BUILD_DURING_DEPLOYMENT #
+    ####################################################################################################################################
+    WEBSITE_RUN_FROM_PACKAGE = 1
 
-    SharedStorageAccount__credential      = "managedidentity"
-    SharedStorageAccount__clientId        = azurerm_user_assigned_identity.default_mi.client_id
-    SharedStorageAccount__accountName     = azurerm_storage_account.shared_storage_account.name
-    SharedStorageAccount__blobServiceUri  = "https://${azurerm_storage_account.shared_storage_account.name}.blob.core.windows.net"  # I don't think this is necessary if SharedStorageAccount_accountName is set
-    SharedStorageAccount__queueServiceUri = "https://${azurerm_storage_account.shared_storage_account.name}.queue.core.windows.net" # I don't think this is necessary if SharedStorageAccount_accountName is set
-    SharedStorageAccount__tableServiceUri = "https://${azurerm_storage_account.shared_storage_account.name}.table.core.windows.net" # I don't think this is necessary if SharedStorageAccount_accountName is set
+    #############################################
+    # Tenants which are allowed to authenticate #
+    #############################################
+    WEBSITE_AUTH_ADD_ALLOWED_TENANTS = data.azurerm_client_config.current.tenant_id
 
-    WEBSITE_CONTENTOVERVNET                  = 1                                                                                                                                                                                               # This needs to be enabled to restrict storage account to vnet. The vnetContentShareEnabled in site_config doesn't exist yet.
-    WEBSITE_CONTENTSHARE                     = var.file_share_name                                                                                                                                                                             # The name of the file share which is used for the backend function app code.
-    WEBSITE_CONTENTAZUREFILECONNECTIONSTRING = "DefaultEndpointsProtocol=https;AccountName=${azurerm_storage_account.function_app_storage_account.name};AccountKey=${azurerm_storage_account.function_app_storage_account.primary_access_key}" # Connection string for storage account where the function app code is stored.
+    #################################################################################################################################################
+    # Default backend storage account: These values will get populated automatically, so we must intentionally put them in the code to hide secrets #
+    #################################################################################################################################################
+    AzureWebJobsStorage = "@Microsoft.KeyVault(SecretUri=https://${azurerm_key_vault.shared_key_vault.name}.vault.azure.net/secrets/${var.connection_name_secret})" # Connection string for storage account where the function app code is stored.
+
+    #########################################################################
+    # Shared storage account connection: Covers Blob, Queue and Table URI's #
+    #########################################################################
+    SharedStorageAccount__credential  = "managedidentity"
+    SharedStorageAccount__clientId    = azurerm_user_assigned_identity.default_mi.client_id
+    SharedStorageAccount__accountName = azurerm_storage_account.shared_storage_account.name
+
+
+    ####################################################################################################################################################
+    # Azure files share: Set the share name, the authentication,  and ignore validation because of the key vault reference (cannot resolve at runtime).#
+    ####################################################################################################################################################
+    WEBSITE_CONTENTSHARE                     = var.file_share_name                                                                                                                       # The name of the file share which is used for the backend function app code.
+    WEBSITE_CONTENTAZUREFILECONNECTIONSTRING = "@Microsoft.KeyVault(SecretUri=https://${azurerm_key_vault.shared_key_vault.name}.vault.azure.net/secrets/${var.connection_name_secret})" # Connection string for storage account where the function app code is stored.
+    WEBSITE_CONTENTOVERVNET                  = 1                                                                                                                                         # Equivalent to th site setting vnetContentShareEnabled (not available in Terraform). It allows function app to properly communicate with file share.
+    WEBSITE_SKIP_CONTENTSHARE_VALIDATION     = 1
   }
   site_config {
     pre_warmed_instance_count = 5
@@ -422,13 +431,32 @@ resource "azurerm_windows_function_app" "fa_testingapp" {
     }
     vnet_route_all_enabled = true # This replaces the legacy app_setting WEBSITE_VNET_ROUTE_ALL. Route all outbound traffic through vnet.
   }
+  auth_settings_v2 {
+    auth_enabled           = true
+    require_authentication = true
+    unauthenticated_action = "Return401"
+    active_directory_v2 {
+      client_id            = azurerm_user_assigned_identity.default_mi.client_id # This should be an app registration so it won't be picked up. It doesn't matter what this is though.
+      tenant_auth_endpoint = "https://sts.windows.net/${data.azurerm_client_config.current.tenant_id}"
+      allowed_audiences    = ["https://management.azure.com/"]
+      allowed_applications = [azurerm_user_assigned_identity.default_mi.client_id] # This is the important field => This has to be the managed identity which requests the bearer token.
+    }
+    login {
+      token_store_enabled = false
+    }
+  }
+  builtin_logging_enabled = false # should disable AzureWebJobsDashboard
+  depends_on = [
+    azurerm_storage_account.function_app_storage_account,
+    azurerm_key_vault.shared_key_vault
+  ]
   tags = var.tags
 }
 
 
-##################################################
+################################################################################
 # Function App Private Endpoint and DNS zones
-##################################################
+################################################################################
 
 resource "azurerm_private_dns_zone" "function_app_dns_zone" {
   name                = "privatelink.azurewebsites.net"
@@ -463,37 +491,9 @@ resource "azurerm_private_endpoint" "function_app" {
   tags = var.tags
 }
 
-##################################################
-# Function App Managed Identity RBAC for Function App Storage Account
-##################################################
-resource "azurerm_role_assignment" "blob_data_contributor_function_app" {
-  scope                = azurerm_storage_account.function_app_storage_account.id
-  role_definition_name = "Storage Blob Data Contributor"
-  principal_id         = azurerm_user_assigned_identity.default_mi.principal_id
-}
-
-resource "azurerm_role_assignment" "table_data_contributor_function_app" {
-  scope                = azurerm_storage_account.function_app_storage_account.id
-  role_definition_name = "Storage Table Data Contributor"
-  principal_id         = azurerm_user_assigned_identity.default_mi.principal_id
-
-}
-
-resource "azurerm_role_assignment" "queue_data_contributor_function_app" {
-  scope                = azurerm_storage_account.function_app_storage_account.id
-  role_definition_name = "Storage Queue Data Contributor"
-  principal_id         = azurerm_user_assigned_identity.default_mi.principal_id
-}
-
-resource "azurerm_role_assignment" "storage_account_contributor_function_app" {
-  scope                = azurerm_storage_account.function_app_storage_account.id
-  role_definition_name = "Storage Account Contributor"
-  principal_id         = azurerm_user_assigned_identity.default_mi.principal_id
-}
-
-##################################################
+################################################################################
 # Function App Managed Identity RBAC for Shared Storage Account
-##################################################
+################################################################################
 resource "azurerm_role_assignment" "blob_data_contributor_shared_storage" {
   scope                = azurerm_storage_account.shared_storage_account.id
   role_definition_name = "Storage Blob Data Contributor"
@@ -520,9 +520,9 @@ resource "azurerm_role_assignment" "storage_account_contributor_shared_storage" 
 }
 
 
-##################################################
+################################################################################
 # Function App Managed Identity RBAC for Key Vault
-##################################################
+################################################################################
 
 resource "azurerm_role_assignment" "key_vault_administrator" {
   scope                = azurerm_key_vault.shared_key_vault.id
@@ -530,22 +530,12 @@ resource "azurerm_role_assignment" "key_vault_administrator" {
   principal_id         = azurerm_user_assigned_identity.default_mi.principal_id
 }
 
-##################################################
+################################################################################
 # Function App Managed Identity RBAC for function app (to publish)
-##################################################
+################################################################################
 
-resource "azurerm_role_assignment" "key_vault_administrator" {
+resource "azurerm_role_assignment" "function_app_contributor" {
   scope                = azurerm_windows_function_app.fa_testingapp.id
   role_definition_name = "Contributor"
   principal_id         = azurerm_user_assigned_identity.default_mi.principal_id
 }
-
-
-################################################## IMPORTANT  #########################################################
-# TODO: Test out how to hit function app url with managed identity
-################################################## APPLICATION LAYER ##################################################
-# TODO: Test how to print things to a queue with managed identity
-# TODO: Test how to print things to blobs with managed identity
-# TODO: Test how to reference secrets from a key vault with managed identity and maybe print to a queue with managed identity
-# TODO: Test the --> http --> function app (get secrets from key vault) --> service bus --> print to a queue with managed identity
-########################################################################################################################

@@ -44,3 +44,9 @@ terraform.rc
 
 # Ignore environment variables
 environment_variables.sh
+
+# Ignore credentials file
+credentials.sh
+
+# Ignore the notes which are made
+notes.txt

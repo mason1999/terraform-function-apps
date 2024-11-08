@@ -39,6 +39,22 @@ variable "shared_storage_account_name" {
   type        = string
 }
 
+variable "public_access_enabled" {
+  description = "(Required) Enable public access (or not) on all the resources."
+  type        = bool
+}
+
+variable "connection_name_secret" {
+  description = "(Required) The name of the secret variable to be stored in the key vault."
+  type        = string
+}
+
+variable "destroy_connection_name_secret" {
+  description = "(Optional) This variable controls whether we should destroy the connection_name_secret. Defaults to false."
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   description = "(Optional) The tags to assign to each infrastructure resource."
   type        = map(string)
